@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Full CloudFormation stack for AMI backup, patching, sanity test, and notification.
+
+Resources:
+
+  AutoPatchSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: aws-auto-ami-patch-ssm-sanitytest-sns-topic
+      KmsMasterKeyId: alias/aws/sns
+      Subscription:
+        - Protocol: email
+          Endpoint: imran.sayed@piramal.com
+
+  SanityTestLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aws-auto-ami-patch-ssm-sanitytest-iamrole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowSNSPublishAndSSM
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                  - ssm:SendCommand
+                  - ssm:GetCommandInvocation
+                Resource: "*"
+
+  SanityTestLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aws-auto-ami-patch-ssm-sanitytest
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 300
+      Role: !GetAtt SanityTestLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import subprocess
+          import json
+
+          def lambda_handler(event, context):
+              try:
+                  sns_topic_arn = "arn:aws:sns:ap-south-1:467660529422:aws-auto-ami-patch-ssm-sanitytest-sns-topic"
+                  commands = [
+                      "df -TH",
+                      "free -m",
+                      "netstat -plant",
+                      "systemctl list-units --type=service --state=running"
+                  ]
+                  results = {}
+                  for cmd in commands:
+                      result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                      results[cmd] = result.stdout
+
+                  sns = boto3.client("sns")
+                  sns.publish(
+                      TopicArn=sns_topic_arn,
+                      Subject="EC2 Sanity Test Results",
+                      Message=json.dumps(results, indent=2)
+                  )
+
+                  return {"statusCode": 200, "body": "Sanity check complete and published."}
+
+              except Exception as e:
+                  print(f"Error occurred: {str(e)}")
+                  raise
+
+  PatchAutomationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aws-auto-ami-patch-ssm-doc-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ssm.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowSSMActions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:CreateImage
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstances
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                  - ssm:SendCommand
+                  - ssm:ListCommands
+                  - ssm:ListCommandInvocations
+                  - ssm:GetAutomationExecution
+                  - ssm:StartAutomationExecution
+                  - ssm:DescribeInstanceInformation
+                  - sns:Publish
+                  - lambda:InvokeFunction
+                  - iam:PassRole
+                Resource: "*"
+
+  PatchAutomationDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      Name: AwsAutoAmiPatchSsmDoc
+      Content:
+        description: |
+          This Automation workflow safely creates a backup (AMI) of the target EC2 instance before applying patches.
+          It ensures that patching operations only proceed after the AMI is successfully created.
+          After patching, it invokes a Lambda function to perform a sanity check and sends results via SNS.
+        schemaVersion: '0.3'
+        assumeRole: '{{ AutomationAssumeRole }}'
+        parameters:
+          InstanceId:
+            type: String
+          AutomationAssumeRole:
+            type: String
+        mainSteps:
+          - name: CreateAMI
+            action: aws:createImage
+            nextStep: WaitForAMIAvailable
+            inputs:
+              InstanceId: '{{ InstanceId }}'
+              ImageName: Backup-{{ InstanceId }}-{{ global:DATE_TIME }}
+              NoReboot: true
+
+          - name: WaitForAMIAvailable
+            action: aws:waitForAwsResourceProperty
+            timeoutSeconds: 1200
+            nextStep: RunPatchBaseline
+            inputs:
+              Service: ec2
+              Api: DescribeImages
+              PropertySelector: $.Images[0].State
+              DesiredValues:
+                - available
+              ImageIds:
+                - '{{ CreateAMI.ImageId }}'
+
+          - name: RunPatchBaseline
+            action: aws:runCommand
+            nextStep: SanityCheck
+            inputs:
+              DocumentName: AWS-RunPatchBaseline
+              InstanceIds:
+                - '{{ InstanceId }}'
+              Parameters:
+                Operation: Install
+
+          - name: SanityCheck
+            action: aws:invokeLambdaFunction
+            isEnd: true
+            inputs:
+              FunctionName: aws-auto-ami-patch-ssm-sanitytest
+              Payload: '{"instance_id": "{{ InstanceId }}"}'
