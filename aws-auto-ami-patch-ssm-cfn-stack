@@ -11,7 +11,7 @@ Resources:
       KmsMasterKeyId: alias/aws/sns
       Subscription:
         - Protocol: email
-          Endpoint: imran.sayed@piramal.com
+          Endpoint: imran.sayyed@piramal.com
 
   SanityTestLambdaRole:
     Type: AWS::IAM::Role
@@ -36,6 +36,7 @@ Resources:
                   - sns:Publish
                   - ssm:SendCommand
                   - ssm:GetCommandInvocation
+                  - ec2:DescribeInstances
                 Resource: "*"
 
   SanityTestLambda:
@@ -54,7 +55,7 @@ Resources:
 
           def lambda_handler(event, context):
               try:
-                  sns_topic_arn = !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:aws-auto-ami-patch-ssm-sanitytest-sns-topic
+                  sns_topic_arn = "arn:aws:sns:ap-south-1:007628705973:aws-auto-ami-patch-ssm-sanitytest-sns-topic"
                   commands = [
                       "df -TH",
                       "free -m",
