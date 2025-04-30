@@ -54,7 +54,7 @@ Resources:
 
           def lambda_handler(event, context):
               try:
-                  sns_topic_arn = "arn:aws:sns:ap-south-1:467660529422:aws-auto-ami-patch-ssm-sanitytest-sns-topic"
+                  sns_topic_arn = !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:aws-auto-ami-patch-ssm-sanitytest-sns-topic
                   commands = [
                       "df -TH",
                       "free -m",
