@@ -36,7 +36,6 @@ Resources:
                   - sns:Publish
                   - ssm:SendCommand
                   - ssm:GetCommandInvocation
-                  - ec2:DescribeInstances
                 Resource: "*"
 
   SanityTestLambda:
@@ -50,31 +49,58 @@ Resources:
       Code:
         ZipFile: |
           import boto3
-          import subprocess
           import json
+          import time
 
           def lambda_handler(event, context):
-              try:
-                  sns_topic_arn = "arn:aws:sns:ap-south-1:007628705973:aws-auto-ami-patch-ssm-sanitytest-sns-topic"
-                  commands = [
-                      "df -TH",
-                      "free -m",
-                      "netstat -plant",
-                      "systemctl list-units --type=service --state=running"
-                  ]
-                  results = {}
-                  for cmd in commands:
-                      result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                      results[cmd] = result.stdout
+              sns_topic_arn = "arn:aws:sns:ap-south-1:007628705973:aws-auto-ami-patch-ssm-sanitytest-sns-topic"
+              instance_id = event.get("instance_id")
 
-                  sns = boto3.client("sns")
+              commands = [
+                  "df -TH",
+                  "free -m",
+                  "netstat -plant",
+                  "systemctl list-units --type=service --state=running"
+              ]
+
+              ssm = boto3.client("ssm")
+              sns = boto3.client("sns")
+
+              try:
+                  response = ssm.send_command(
+                      InstanceIds=[instance_id],
+                      DocumentName="AWS-RunShellScript",
+                      Parameters={"commands": commands},
+                  )
+                  command_id = response["Command"]["CommandId"]
+
+                  # Wait and poll the command result
+                  time.sleep(5)
+                  output = ssm.get_command_invocation(
+                      CommandId=command_id,
+                      InstanceId=instance_id
+                  )
+
+                  # Format the output in HTML
+                  html_message = f"""
+                  <html>
+                  <body>
+                      <h2>Sanity Test Results for Instance {instance_id}</h2>
+                      <pre>{output['StandardOutputContent']}</pre>
+                      <h3>Errors (if any)</h3>
+                      <pre>{output['StandardErrorContent']}</pre>
+                  </body>
+                  </html>
+                  """
+
                   sns.publish(
                       TopicArn=sns_topic_arn,
                       Subject="EC2 Sanity Test Results",
-                      Message=json.dumps(results, indent=2)
+                      Message=html_message,
+                      MessageStructure='raw'
                   )
 
-                  return {"statusCode": 200, "body": "Sanity check complete and published."}
+                  return {"statusCode": 200, "body": "Sanity check results sent via email."}
 
               except Exception as e:
                   print(f"Error occurred: {str(e)}")
@@ -118,7 +144,7 @@ Resources:
     Type: AWS::SSM::Document
     Properties:
       DocumentType: Automation
-      Name: AwsAutoAmiPatchSsmDoc
+      Name: AwsAutoAmiPatchSsmDocument
       Content:
         description: |
           This Automation workflow safely creates a backup (AMI) of the target EC2 instance before applying patches.
