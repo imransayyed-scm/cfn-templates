@@ -2,6 +2,28 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Full CloudFormation stack for AMI backup, patching, sanity test, and notification.
 
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address to receive SNS notifications.
+    Default: "imran.sayyed@piramal.com"
+
+  Entity:
+    Type: String
+    Default: "Retail"
+
+  Environment:
+    Type: String
+    Default: "Development"
+
+  Team:
+    Type: String
+    Default: "Shared_Infra"
+
+  Owner:
+    Type: String
+    Default: "Nitin Kamble"
+
 Resources:
 
   AutoPatchSnsTopic:
@@ -11,7 +33,16 @@ Resources:
       KmsMasterKeyId: alias/aws/sns
       Subscription:
         - Protocol: email
-          Endpoint: imran.sayyed@piramal.com
+          Endpoint: !Ref NotificationEmail
+      Tags:
+        - Key: Entity
+          Value: !Ref Entity
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Owner
+          Value: !Ref Owner
 
   SanityTestLambdaRole:
     Type: AWS::IAM::Role
@@ -37,6 +68,15 @@ Resources:
                   - ssm:SendCommand
                   - ssm:GetCommandInvocation
                 Resource: "*"
+      Tags:
+        - Key: Entity
+          Value: !Ref Entity
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Owner
+          Value: !Ref Owner
 
   SanityTestLambda:
     Type: AWS::Lambda::Function
@@ -103,6 +143,15 @@ Resources:
               except Exception as e:
                   print(f"Error occurred: {str(e)}")
                   raise
+      Tags:
+        - Key: Entity
+          Value: !Ref Entity
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Owner
+          Value: !Ref Owner
 
   PatchAutomationRole:
     Type: AWS::IAM::Role
@@ -137,6 +186,15 @@ Resources:
                   - lambda:InvokeFunction
                   - iam:PassRole
                 Resource: "*"
+      Tags:
+        - Key: Entity
+          Value: !Ref Entity
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Owner
+          Value: !Ref Owner
 
   PatchAutomationDocument:
     Type: AWS::SSM::Document
