@@ -74,14 +74,12 @@ Resources:
                   )
                   command_id = response["Command"]["CommandId"]
 
-                  # Wait and poll the command result
                   time.sleep(5)
                   output = ssm.get_command_invocation(
                       CommandId=command_id,
                       InstanceId=instance_id
                   )
 
-                  # Format the output in HTML
                   html_message = f"""
                   <html>
                   <body>
@@ -195,3 +193,47 @@ Resources:
             inputs:
               FunctionName: aws-auto-ami-patch-ssm-sanitytest
               Payload: '{"instance_id": "{{ InstanceId }}"}'
+
+Outputs:
+
+  SanityTestLambdaArn:
+    Description: ARN of the Sanity Test Lambda Function
+    Value: !GetAtt SanityTestLambda.Arn
+    Export:
+      Name: SanityTestLambdaArn
+
+  SanityTestLambdaName:
+    Description: Name of the Sanity Test Lambda Function
+    Value: !Ref SanityTestLambda
+    Export:
+      Name: SanityTestLambdaName
+
+  SanityTestLambdaRoleArn:
+    Description: ARN of the IAM Role for the Sanity Test Lambda
+    Value: !GetAtt SanityTestLambdaRole.Arn
+    Export:
+      Name: SanityTestLambdaRoleArn
+
+  PatchAutomationRoleArn:
+    Description: ARN of the IAM Role for Patch Automation
+    Value: !GetAtt PatchAutomationRole.Arn
+    Export:
+      Name: PatchAutomationRoleArn
+
+  PatchAutomationDocumentName:
+    Description: Name of the SSM Automation Document
+    Value: !Ref PatchAutomationDocument
+    Export:
+      Name: PatchAutomationDocumentName
+
+  SnsTopicArn:
+    Description: ARN of the SNS Topic for Notifications
+    Value: !Ref AutoPatchSnsTopic
+    Export:
+      Name: AutoPatchSnsTopicArn
+
+  SnsTopicName:
+    Description: Name of the SNS Topic for Notifications
+    Value: !Sub "${AutoPatchSnsTopic.TopicName}"
+    Export:
+      Name: AutoPatchSnsTopicName
