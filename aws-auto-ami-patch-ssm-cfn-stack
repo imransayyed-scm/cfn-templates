@@ -228,6 +228,7 @@ Resources:
     Properties:
       DocumentType: Automation
       Name: AwsAutoAmiPatchSsmDocument
+      UpdateMethod: NewVersion
       Content:
         description: |
           This Automation workflow safely creates a backup (AMI) of the target EC2 instance before applying patches.
@@ -264,13 +265,26 @@ Resources:
 
           - name: RunPatchBaseline
             action: aws:runCommand
-            nextStep: SanityCheck
+            nextStep: NotifyAmiAndPatchResult
             inputs:
               DocumentName: AWS-RunPatchBaseline
               InstanceIds:
                 - '{{ InstanceId }}'
               Parameters:
                 Operation: Install
+
+          - name: NotifyAmiAndPatchResult
+            action: aws:executeAwsApi
+            nextStep: SanityCheck
+            inputs:
+              Service: sns
+              Api: Publish
+              TopicArn: !Ref AutoPatchSnsTopic
+              Message: |
+                ? AMI Backup and Patching are completed, Sanity check is in progress:
+                Instance ID: {{ InstanceId }}
+                AMI ID: {{ CreateAMI.ImageId }}
+                Automation Execution ID: {{ automation:EXECUTION_ID }}
 
           - name: SanityCheck
             action: aws:invokeLambdaFunction
