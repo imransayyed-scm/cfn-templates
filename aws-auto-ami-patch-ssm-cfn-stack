@@ -88,13 +88,17 @@ Resources:
       Role: !GetAtt SanityTestLambdaRole.Arn
       Code:
         ZipFile: |
-          import boto3
           import json
+          import boto3
           import time
 
+          ssm_client = boto3.client('ssm')
+          sns_client = boto3.client('sns')
+
+          SNS_TOPIC_ARN = "arn:aws:sns:ap-south-1:007628705973:aws-auto-ami-patch-ssm-sanitytest-sns-topic"
+
           def lambda_handler(event, context):
-              sns_topic_arn = "arn:aws:sns:ap-south-1:007628705973:aws-auto-ami-patch-ssm-sanitytest-sns-topic"
-              instance_id = event.get("instance_id")
+              instance_id = event.get("instance_id", "unknown")
 
               commands = [
                   "df -TH",
@@ -103,46 +107,69 @@ Resources:
                   "systemctl list-units --type=service --state=running"
               ]
 
-              ssm = boto3.client("ssm")
-              sns = boto3.client("sns")
-
               try:
-                  response = ssm.send_command(
+                  response = ssm_client.send_command(
                       InstanceIds=[instance_id],
                       DocumentName="AWS-RunShellScript",
-                      Parameters={"commands": commands},
-                  )
-                  command_id = response["Command"]["CommandId"]
-
-                  time.sleep(5)
-                  output = ssm.get_command_invocation(
-                      CommandId=command_id,
-                      InstanceId=instance_id
+                      Parameters={
+                          'commands': commands
+                      }
                   )
 
-                  html_message = f"""
-                  <html>
-                  <body>
-                      <h2>Sanity Test Results for Instance {instance_id}</h2>
-                      <pre>{output['StandardOutputContent']}</pre>
-                      <h3>Errors (if any)</h3>
-                      <pre>{output['StandardErrorContent']}</pre>
-                  </body>
-                  </html>
-                  """
+                  command_id = response['Command']['CommandId']
+                  output = get_command_output(instance_id, command_id)
 
-                  sns.publish(
-                      TopicArn=sns_topic_arn,
-                      Subject="EC2 Sanity Test Results",
-                      Message=html_message,
-                      MessageStructure='raw'
+                  message = f"? Sanity Test Output for Instance {instance_id}:\n\n"
+                  message += output
+
+                  sns_client.publish(
+                      TopicArn=SNS_TOPIC_ARN,
+                      Message=message,
+                      Subject="AWS Auto. AMI, Patching & Sanity Test Results"
                   )
 
-                  return {"statusCode": 200, "body": "Sanity check results sent via email."}
+                  return {
+                      "statusCode": 200,
+                      "body": json.dumps({
+                          "status": "ok",
+                          "message": "Sanity test executed successfully, results sent to SNS."
+                      })
+                  }
 
               except Exception as e:
-                  print(f"Error occurred: {str(e)}")
-                  raise
+                  print(f"Error: {str(e)}")
+                  return {
+                      "statusCode": 500,
+                      "body": json.dumps({
+                          "status": "error",
+                          "message": f"Error executing sanity test: {str(e)}"
+                      })
+                  }
+
+          def get_command_output(instance_id, command_id, timeout=60, interval=5):
+              elapsed = 0
+              while elapsed < timeout:
+                  try:
+                      response = ssm_client.get_command_invocation(
+                          InstanceId=instance_id,
+                          CommandId=command_id
+                      )
+                      status = response['Status']
+                      if status in ['Success', 'Failed', 'TimedOut', 'Cancelled']:
+                          output = f"SSM Command Status: {status}\n\n"
+                          output += "Standard Output:\n"
+                          output += response.get('StandardOutputContent', 'No output\n')
+                          if response.get('StandardErrorContent'):
+                              output += "\nStandard Error:\n"
+                              output += response.get('StandardErrorContent', 'None')
+                          return output
+                      else:
+                          time.sleep(interval)
+                          elapsed += interval
+                  except ssm_client.exceptions.InvocationDoesNotExist:
+                      time.sleep(interval)
+                      elapsed += interval
+              return "Error: Timeout while waiting for command to finish."
       Tags:
         - Key: Entity
           Value: !Ref Entity
