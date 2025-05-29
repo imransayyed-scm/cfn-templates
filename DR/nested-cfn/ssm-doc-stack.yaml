@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SSM Automation Document for RDS failover
+
+Parameters:
+  DBInstanceIdentifier:
+    Type: String
+  AutomationAssumeRole:
+    Type: String
+
+Resources:
+  RDSFailoverSSMDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: RDS-Force-Failover
+      DocumentType: Automation
+      DocumentFormat: YAML
+      UpdateMethod: NewVersion
+      Content:
+        description: RDS failover + SG update + target refresh
+        schemaVersion: '0.3'
+        assumeRole: '{{ AutomationAssumeRole }}'
+        parameters:
+          DBInstanceIdentifier:
+            type: String
+            description: RDS DB Instance Identifier
+          AutomationAssumeRole:
+            type: String
+            description: IAM Role for Automation
+        mainSteps:
+          - name: RebootRDS
+            action: aws:executeAwsApi
+            inputs:
+              Service: rds
+              Api: RebootDBInstance
+              DBInstanceIdentifier: '{{ DBInstanceIdentifier }}'
+              ForceFailover: true
+
+          - name: AddIngressForDR1
+            action: aws:executeAwsApi
+            inputs:
+              Service: ec2
+              Api: AuthorizeSecurityGroupIngress
+              GroupId: sg-01fe63d5cf1d626e9
+              IpPermissions:
+                - IpProtocol: tcp
+                  FromPort: 3306
+                  ToPort: 3306
+                  IpRanges:
+                    - CidrIp: 172.28.7.144/32
+                      Description: PosidexDR-test-1
+
+          - name: AddIngressForDR2
+            action: aws:executeAwsApi
+            inputs:
+              Service: ec2
+              Api: AuthorizeSecurityGroupIngress
+              GroupId: sg-01fe63d5cf1d626e9
+              IpPermissions:
+                - IpProtocol: tcp
+                  FromPort: 3306
+                  ToPort: 3306
+                  IpRanges:
+                    - CidrIp: 172.28.7.181/32
+                      Description: PosidexDR-test-2
+
+          - name: WaitForRDSAvailable
+            action: aws:waitForAwsResourceProperty
+            inputs:
+              Service: rds
+              Api: DescribeDBInstances
+              DBInstanceIdentifier: '{{ DBInstanceIdentifier }}'
+              PropertySelector: '$.DBInstances[0].DBInstanceStatus'
+              DesiredValues:
+                - available
+
+          - name: InvokeRegisterLambda
+            action: aws:invokeLambdaFunction
+            inputs:
+              FunctionName: RegisterTargetsAfterRDSAvailable
+              Payload: '{"DBInstanceIdentifier":"{{ DBInstanceIdentifier }}"}'
+
+Outputs:
+  SSMDocumentName:
+    Value: !Ref RDSFailoverSSMDocument

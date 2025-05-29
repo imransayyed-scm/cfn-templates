@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM Roles for SSM Automation
+
+Resources:
+  RDSFailoverAutomationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SSM-RDS-Failover-AutomationRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ssm.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowRDSAndEC2
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:RebootDBInstance
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - rds:DescribeDBInstances
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+Outputs:
+  AutomationRoleArn:
+    Value: !GetAtt RDSFailoverAutomationRole.Arn

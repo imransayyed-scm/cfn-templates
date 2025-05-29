@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Parent Stack for RDS Failover with Nested IAM, Lambda, and SSM Documents
+
+Parameters:
+  DBInstanceIdentifier:
+    Type: String
+  TGUI:
+    Type: String
+  TGTomcat:
+    Type: String
+  TGTokengen:
+    Type: String
+  NewInstanceIDs:
+    Type: CommaDelimitedList
+  OldInstanceIDs:
+    Type: CommaDelimitedList
+
+Resources:
+
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/iam-template.yaml
+
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/lambda-template.yaml
+      Parameters:
+        TGUI: !Ref TGUI
+        TGTomcat: !Ref TGTomcat
+        TGTokengen: !Ref TGTokengen
+        NewInstanceIDs: !Join [",", !Ref NewInstanceIDs]
+        OldInstanceIDs: !Join [",", !Ref OldInstanceIDs]
+        LambdaRoleArn: !GetAtt IAMStack.Outputs.RegisterLambdaRoleArn
+
+  SSMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/YOUR_BUCKET/ssm-template.yaml
+      Parameters:
+        DBInstanceIdentifier: !Ref DBInstanceIdentifier
+        AutomationRoleArn: !GetAtt IAMStack.Outputs.AutomationRoleArn
+
+Outputs:
+  IAMStackOutput:
+    Value: !Ref IAMStack
+  LambdaStackOutput:
+    Value: !Ref LambdaStack
+  SSMStackOutput:
+    Value: !Ref SSMStack

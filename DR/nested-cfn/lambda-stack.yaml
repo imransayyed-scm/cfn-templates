@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda and Execution Role for Target Registration
+
+Parameters:
+  TG_UI:
+    Type: String
+  TG_TOMCAT:
+    Type: String
+  TG_TOKENGEN:
+    Type: String
+  NEW_INSTANCES:
+    Type: String
+  OLD_INSTANCES:
+    Type: String
+
+Resources:
+  RegisterTargetsLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: RegisterTargetsLambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RegisterTargetsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:DeregisterTargets
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  RegisterTargetsLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: RegisterTargetsAfterRDSAvailable
+      Handler: index.handler
+      Runtime: python3.12
+      Role: !GetAtt RegisterTargetsLambdaExecutionRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          TG_UI: !Ref TG_UI
+          TG_TOMCAT: !Ref TG_TOMCAT
+          TG_TOKENGEN: !Ref TG_TOKENGEN
+          NEW_INSTANCES: !Ref NEW_INSTANCES
+          OLD_INSTANCES: !Ref OLD_INSTANCES
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+
+          def handler(event, context):
+              elbv2 = boto3.client('elbv2')
+
+              TG_UI = os.environ['TG_UI']
+              TG_TOMCAT = os.environ['TG_TOMCAT']
+              TG_TOKENGEN = os.environ['TG_TOKENGEN']
+              NEW = os.environ['NEW_INSTANCES'].split(',')
+              OLD = os.environ['OLD_INSTANCES'].split(',')
+
+              elbv2.register_targets(TargetGroupArn=TG_UI, Targets=[{'Id': NEW[0], 'Port': 8089}])
+              elbv2.register_targets(TargetGroupArn=TG_TOMCAT, Targets=[{'Id': NEW[0], 'Port': 8089}, {'Id': NEW[1], 'Port': 8089}])
+              elbv2.register_targets(TargetGroupArn=TG_TOKENGEN, Targets=[{'Id': NEW[0], 'Port': 2405}])
+
+              elbv2.deregister_targets(TargetGroupArn=TG_UI, Targets=[{'Id': OLD[0], 'Port': 8089}])
+              elbv2.deregister_targets(TargetGroupArn=TG_TOMCAT, Targets=[{'Id': OLD[0], 'Port': 8089}, {'Id': OLD[1], 'Port': 8089}])
+              elbv2.deregister_targets(TargetGroupArn=TG_TOKENGEN, Targets=[{'Id': OLD[0], 'Port': 2405}])
+
+              return {"status": "targets updated"}
+
+Outputs:
+  LambdaFunctionName:
+    Value: !Ref RegisterTargetsLambda
