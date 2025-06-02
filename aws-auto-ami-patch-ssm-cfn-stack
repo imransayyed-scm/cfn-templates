@@ -5,7 +5,6 @@ Description: >
 Parameters:
   NotificationEmail:
     Type: String
-    Description: Email address to receive SNS notifications.
     Default: "imran.sayyed@piramal.com"
 
   Entity:
@@ -111,16 +110,12 @@ Resources:
                   response = ssm_client.send_command(
                       InstanceIds=[instance_id],
                       DocumentName="AWS-RunShellScript",
-                      Parameters={
-                          'commands': commands
-                      }
+                      Parameters={'commands': commands}
                   )
-
                   command_id = response['Command']['CommandId']
                   output = get_command_output(instance_id, command_id)
 
-                  message = f"? Sanity Test Output for Instance {instance_id}:\n\n"
-                  message += output
+                  message = f"✅ Sanity Test Output for Instance {instance_id}:\n\n{output}"
 
                   sns_client.publish(
                       TopicArn=SNS_TOPIC_ARN,
@@ -201,6 +196,7 @@ Resources:
                   - ec2:CreateImage
                   - ec2:DescribeImages
                   - ec2:DescribeInstances
+                  - ec2:DescribeTags
                   - ec2:CreateTags
                   - ec2:DeleteTags
                   - ssm:SendCommand
@@ -230,42 +226,58 @@ Resources:
       Name: AwsAutoAmiPatchSsmDocument
       UpdateMethod: NewVersion
       Content:
+        schemaVersion: '0.3'
         description: |
           This Automation workflow safely creates a backup (AMI) of the target EC2 instance before applying patches.
           It ensures that patching operations only proceed after the AMI is successfully created.
           After patching, it invokes a Lambda function to perform a sanity check and sends results via SNS.
-        schemaVersion: '0.3'
         assumeRole: '{{ AutomationAssumeRole }}'
         parameters:
-          InstanceId:
-            type: String
           AutomationAssumeRole:
+            type: String
+          InstanceId:
             type: String
         mainSteps:
           - name: CreateAMI
             action: aws:createImage
             nextStep: WaitForAMIAvailable
+            isEnd: false
             inputs:
-              InstanceId: '{{ InstanceId }}'
               ImageName: Backup-{{ InstanceId }}-{{ global:DATE_TIME }}
+              InstanceId: '{{ InstanceId }}'
               NoReboot: true
 
           - name: WaitForAMIAvailable
             action: aws:waitForAwsResourceProperty
             timeoutSeconds: 1200
-            nextStep: RunPatchBaseline
+            nextStep: TagAMI
+            isEnd: false
             inputs:
-              Service: ec2
-              Api: DescribeImages
+              ImageIds:
+                - '{{ CreateAMI.ImageId }}'
               PropertySelector: $.Images[0].State
               DesiredValues:
                 - available
-              ImageIds:
+              Service: ec2
+              Api: DescribeImages
+
+          - name: TagAMI
+            action: aws:createTags
+            nextStep: RunPatchBaseline
+            isEnd: false
+            inputs:
+              ResourceIds:
                 - '{{ CreateAMI.ImageId }}'
+              Tags:
+                - Key: AMITaken
+                  Value: '{{ global:DATE }}'
+                - Key: AMIFor
+                  Value: BeforePatch
 
           - name: RunPatchBaseline
             action: aws:runCommand
             nextStep: NotifyAmiAndPatchResult
+            isEnd: false
             inputs:
               DocumentName: AWS-RunPatchBaseline
               InstanceIds:
@@ -276,12 +288,13 @@ Resources:
           - name: NotifyAmiAndPatchResult
             action: aws:executeAwsApi
             nextStep: SanityCheck
+            isEnd: false
             inputs:
               Service: sns
               Api: Publish
-              TopicArn: !Ref AutoPatchSnsTopic
+              TopicArn: arn:aws:sns:ap-south-1:007628705973:aws-auto-ami-patch-ssm-sanitytest-sns-topic
               Message: |
-                ? AMI Backup and Patching are completed, Sanity check is in progress:
+                ✅ AMI Backup and Patching are completed, Sanity check is in progress:
                 Instance ID: {{ InstanceId }}
                 AMI ID: {{ CreateAMI.ImageId }}
                 Automation Execution ID: {{ automation:EXECUTION_ID }}
@@ -295,44 +308,15 @@ Resources:
 
 Outputs:
 
-  SanityTestLambdaArn:
-    Description: ARN of the Sanity Test Lambda Function
-    Value: !GetAtt SanityTestLambda.Arn
-    Export:
-      Name: SanityTestLambdaArn
-
-  SanityTestLambdaName:
-    Description: Name of the Sanity Test Lambda Function
-    Value: !Ref SanityTestLambda
-    Export:
-      Name: SanityTestLambdaName
-
-  SanityTestLambdaRoleArn:
-    Description: ARN of the IAM Role for the Sanity Test Lambda
-    Value: !GetAtt SanityTestLambdaRole.Arn
-    Export:
-      Name: SanityTestLambdaRoleArn
-
-  PatchAutomationRoleArn:
-    Description: ARN of the IAM Role for Patch Automation
-    Value: !GetAtt PatchAutomationRole.Arn
-    Export:
-      Name: PatchAutomationRoleArn
-
   PatchAutomationDocumentName:
     Description: Name of the SSM Automation Document
     Value: !Ref PatchAutomationDocument
-    Export:
-      Name: PatchAutomationDocumentName
+
+  SanityTestLambdaArn:
+    Value: !GetAtt SanityTestLambda.Arn
+
+  PatchAutomationRoleArn:
+    Value: !GetAtt PatchAutomationRole.Arn
 
   SnsTopicArn:
-    Description: ARN of the SNS Topic for Notifications
     Value: !Ref AutoPatchSnsTopic
-    Export:
-      Name: AutoPatchSnsTopicArn
-
-  SnsTopicName:
-    Description: Name of the SNS Topic for Notifications
-    Value: !Sub "${AutoPatchSnsTopic.TopicName}"
-    Export:
-      Name: AutoPatchSnsTopicName
